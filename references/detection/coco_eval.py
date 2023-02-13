@@ -11,7 +11,7 @@ from pycocotools.cocoeval import COCOeval
 
 
 class CocoEvaluator:
-    def __init__(self, coco_gt, iou_types):
+    def __init__(self, coco_gt, iou_types, keypointnum=None, kpt_oks_sigmas=None):
         if not isinstance(iou_types, (list, tuple)):
             raise TypeError(f"This constructor expects iou_types of type list or tuple, instead  got {type(iou_types)}")
         coco_gt = copy.deepcopy(coco_gt)
@@ -19,8 +19,23 @@ class CocoEvaluator:
 
         self.iou_types = iou_types
         self.coco_eval = {}
-        for iou_type in iou_types:
-            self.coco_eval[iou_type] = COCOeval(coco_gt, iouType=iou_type)
+        if keypointnum:
+            if not isinstance(keypointnum, int):
+                raise TypeError(f"This constructor expects keypointnum of type int, instead  got {type(keypointnum)}")
+            for iou_type in iou_types:
+                coco_eval = COCOeval(coco_gt, iouType=iou_type)
+                if kpt_oks_sigmas:
+                    if not isinstance(kpt_oks_sigmas, np.ndarray):
+                        raise TypeError(f"This constructor expects kpt_oks_sigmas of type numpy array, instead  got {type(kpt_oks_sigmas)}")
+                    if not kpt_oks_sigmas.ndim == 1 and not len(kpt_oks_sigmas) == keypointnum:
+                        raise ValueError(f"This constructor expects kpt_oks_sigmas to be a 1D array of length {keypointnum}, instead got {kpt_oks_sigmas.ndim}D array with length of {len(kpt_oks_sigmas)}")
+                    coco_eval.params.kpt_oks_sigmas = kpt_oks_sigmas
+                else:
+                    coco_eval.params.kpt_oks_sigmas = np.ones(keypointnum) / float(keypointnum)
+                self.coco_eval[iou_type] = coco_eval
+        else:
+            for iou_type in iou_types:
+                self.coco_eval[iou_type] = COCOeval(coco_gt, iouType=iou_type)
 
         self.img_ids = []
         self.eval_imgs = {k: [] for k in iou_types}

@@ -231,7 +231,7 @@ def _onnx_heatmaps_to_keypoints_loop(
     return xy_preds, end_scores
 
 
-def heatmaps_to_keypoints(maps, rois):
+def heatmaps_to_keypoints(maps, rois, visibility_scores):
     """Extract predicted keypoint locations from heatmaps. Output has shape
     (#rois, 4, #keypoints) with the 4 rows corresponding to (x, y, logit, prob)
     for each keypoint.
@@ -289,13 +289,15 @@ def heatmaps_to_keypoints(maps, rois):
         y = (y_int.float() + 0.5) * height_correction
         xy_preds[i, 0, :] = x + offset_x[i]
         xy_preds[i, 1, :] = y + offset_y[i]
-        xy_preds[i, 2, :] = 1
+        xy_preds[i, 2, :] = visibility_scores[i]
         end_scores[i, :] = roi_map[torch.arange(num_keypoints, device=roi_map.device), y_int, x_int]
 
     return xy_preds.permute(0, 2, 1), end_scores
 
 
 def keypointrcnn_loss(keypoint_logits, proposals, gt_keypoints, keypoint_matched_idxs):
+    keypoint_logits, keypoint_visibility_scores = keypoint_logits
+
     # type: (Tensor, List[Tensor], List[Tensor], List[Tensor]) -> Tensor
     N, K, H, W = keypoint_logits.shape
     if H != W:
@@ -312,6 +314,8 @@ def keypointrcnn_loss(keypoint_logits, proposals, gt_keypoints, keypoint_matched
         valid.append(valid_per_image.view(-1))
 
     keypoint_targets = torch.cat(heatmaps, dim=0)
+    loss = torch.nn.BCELoss()
+    keypoint_visibility_loss = loss(keypoint_visibility_scores.view(-1), torch.cat(valid, dim=0).to(dtype=torch.float32))
     valid = torch.cat(valid, dim=0).to(dtype=torch.uint8)
     valid = torch.where(valid)[0]
 
@@ -323,19 +327,22 @@ def keypointrcnn_loss(keypoint_logits, proposals, gt_keypoints, keypoint_matched
     keypoint_logits = keypoint_logits.view(N * K, H * W)
 
     keypoint_loss = F.cross_entropy(keypoint_logits[valid], keypoint_targets[valid])
+    keypoint_loss = keypoint_loss + keypoint_visibility_loss
     return keypoint_loss
 
 
 def keypointrcnn_inference(x, boxes):
+    x, keypoint_visibility_scores = x
     # type: (Tensor, List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]
     kp_probs = []
     kp_scores = []
 
     boxes_per_image = [box.size(0) for box in boxes]
     x2 = x.split(boxes_per_image, dim=0)
+    vs2 = keypoint_visibility_scores.split(boxes_per_image, dim=0)
 
-    for xx, bb in zip(x2, boxes):
-        kp_prob, scores = heatmaps_to_keypoints(xx, bb)
+    for xx, bb, vs in zip(x2, boxes, vs2):
+        kp_prob, scores = heatmaps_to_keypoints(xx, bb, vs)
         kp_probs.append(kp_prob)
         kp_scores.append(scores)
 

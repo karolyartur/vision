@@ -295,16 +295,22 @@ class KeypointRCNNPredictor(nn.Module):
             stride=2,
             padding=deconv_kernel // 2 - 1,
         )
+        self.kps_visibility_score = nn.LazyLinear(num_keypoints)
+        self.kps_visibility_activation = nn.Sigmoid()
+
         nn.init.kaiming_normal_(self.kps_score_lowres.weight, mode="fan_out", nonlinearity="relu")
         nn.init.constant_(self.kps_score_lowres.bias, 0)
         self.up_scale = 2
         self.out_channels = num_keypoints
 
     def forward(self, x):
-        x = self.kps_score_lowres(x)
-        return torch.nn.functional.interpolate(
-            x, scale_factor=float(self.up_scale), mode="bilinear", align_corners=False, recompute_scale_factor=False
+        x1 = self.kps_score_lowres(x)
+        heatmaps = torch.nn.functional.interpolate(
+            x1, scale_factor=float(self.up_scale), mode="bilinear", align_corners=False, recompute_scale_factor=False
         )
+        N,K,H,W = x.shape
+        visibility = self.kps_visibility_activation(self.kps_visibility_score(x.view((N,K*H*W))))
+        return heatmaps, visibility
 
 
 _COMMON_META = {
